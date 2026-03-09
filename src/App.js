@@ -141,7 +141,8 @@ export default function App() {
     setFetching(true);
     setFetchStatus({ type: "loading", msg: `Step 1/2 — Fetching ${fetchCount} ${fetchCat} questions from qbreader.org...` });
     try {
-      const qbUrl = `https://www.qbreader.org/api/random-tossup?difficulties=1,2,3&number=${fetchCount}&categories=${encodeURIComponent(fetchCat)}&standardOnly=true`;
+      // Call our own Vercel proxy — avoids CORS issues
+      const qbUrl = `/api/qbreader?difficulties=1,2,3&number=${fetchCount}&categories=${encodeURIComponent(fetchCat)}&standardOnly=true`;
       const res = await fetch(qbUrl);
       if (!res.ok) throw new Error(`qbreader returned HTTP ${res.status}`);
       const data = await res.json();
@@ -157,7 +158,7 @@ export default function App() {
         return `${i + 1}. QUESTION: ${q}\nANSWER: ${a}`;
       }).join("\n\n");
 
-      const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      const claudeRes = await fetch("/api/claude", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
