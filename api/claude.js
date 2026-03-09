@@ -7,6 +7,11 @@ module.exports = function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY environment variable is not set in Vercel' });
+  }
+
   let body = '';
   req.on('data', chunk => body += chunk);
   req.on('end', () => {
@@ -18,6 +23,7 @@ module.exports = function handler(req, res) {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body),
         'anthropic-version': '2023-06-01',
+        'x-api-key': apiKey,
       }
     };
 
