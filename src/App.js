@@ -166,10 +166,8 @@ export default function App() {
           const rawAns = stripHtml(answers[i] || "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
           const answer = rawAns.split("\n")[0].trim();
 
-          // Build question: leadin gives context, part is the specific clue
-          const question = leadin
-            ? `${leadin} — ${clue}`
-            : clue;
+          // Only prepend leadin to the first part for context
+          const question = (i === 0 && leadin) ? `${leadin} — ${clue}` : clue;
 
           if (question && answer && !existing.has(question)) {
             newCards.push(makeCard(question, answer, subcat));
