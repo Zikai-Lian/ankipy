@@ -107,6 +107,7 @@ export default function App() {
   const [fetchCat, setFetchCat] = useState("Science");
   const [fetchCount, setFetchCount] = useState(20);
   const [fetchDeck, setFetchDeck] = useState("Quizbowl");
+  const [fetchDifficulty, setFetchDifficulty] = useState("novice");
   const [fetchStatus, setFetchStatus] = useState(null);
   const [fetching, setFetching] = useState(false);
 
@@ -137,78 +138,53 @@ export default function App() {
   };
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
+  const DIFFICULTY_MAP = { novice: "1,2", intermediate: "3,4", hard: "5,6,7" };
+
   const fetchCards = useCallback(async () => {
     setFetching(true);
-    setFetchStatus({ type: "loading", msg: `Step 1/2 — Fetching ${fetchCount} ${fetchCat} questions from qbreader.org...` });
+    setFetchStatus({ type: "loading", msg: `Fetching ${fetchCount} ${fetchCat} bonus questions...` });
     try {
-      // Call our own Vercel proxy — avoids CORS issues
-      const qbUrl = `/api/qbreader?difficulties=1,2,3&number=${fetchCount}&categories=${encodeURIComponent(fetchCat)}&standardOnly=true`;
+      const diffs = DIFFICULTY_MAP[fetchDifficulty] || "1,2";
+      const qbUrl = `/api/qbreader?endpoint=bonus&difficulties=${diffs}&number=${fetchCount}&categories=${encodeURIComponent(fetchCat)}&standardOnly=true`;
       const res = await fetch(qbUrl);
       if (!res.ok) throw new Error(`qbreader returned HTTP ${res.status}`);
       const data = await res.json();
-      const tossups = data.tossups || [];
-      if (!tossups.length) throw new Error(`No questions found for "${fetchCat}" — try Science or History`);
-
-      setFetchStatus({ type: "loading", msg: `Step 2/2 — AI is rewriting ${tossups.length} questions into clean flashcards...` });
-
-      const rawList = tossups.map((t, i) => {
-        const q = stripHtml(t.question_sanitized || t.question || "");
-        const a = stripHtml(t.answer_sanitized || t.answer || "Unknown")
-          .replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
-        return `${i + 1}. QUESTION: ${q}\nANSWER: ${a}`;
-      }).join("\n\n");
-
-      const claudeRes = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4000,
-          system: `You are a flashcard creator converting quizbowl tossups into clean flashcard questions.
-
-STRICT RULES:
-- Every question must follow one of these patterns:
-  * "Name the [person] who [did specific thing]."
-  * "Name the [thing/place/work] that [has specific property or is known for X]."
-  * "What [term] describes [specific concept]?"
-- Use the most specific and interesting clue from the tossup
-- NEVER use "this", "these", "it", "they" to refer to the answer
-- Answer must be a clean short name or term only — remove anything in brackets like [accept ...] or [prompt ...]
-- Return ONLY a valid JSON array, nothing else, no markdown
-
-Example:
-Input: QUESTION: This president owned Mount Vernon and crossed the Delaware River before becoming the first US president. ANSWER: George Washington
-Output: [{"q":"Name the first US president who owned Mount Vernon and famously crossed the Delaware River.","a":"George Washington"}]
-
-Format: [{"q":"...","a":"..."},...]`,
-          messages: [{ role: "user", content: `Convert these ${tossups.length} tossups into flashcards. Return one JSON object per tossup in order:\n\n${rawList}` }]
-        })
-      });
-
-      if (!claudeRes.ok) {
-        const e = await claudeRes.json().catch(() => ({}));
-        throw new Error(`Claude error ${claudeRes.status}: ${e?.error?.message || "unknown"}`);
-      }
-      const claudeData = await claudeRes.json();
-      const rawText = claudeData.content.map(b => b.text || "").join("");
-      const match = rawText.match(/\[[\s\S]*\]/);
-      if (!match) throw new Error("Could not parse AI response");
-      const cards = JSON.parse(match[0]);
+      const bonuses = data.bonuses || [];
+      if (!bonuses.length) throw new Error(`No bonuses found for "${fetchCat}" — try Science or History`);
 
       const existing = new Set((decks[fetchDeck] || []).map(c => c.front));
-      const newCards = cards
-        .filter((c, i) => c.q?.trim() && c.a?.trim() && !existing.has(c.q.trim()))
-        .map((c, i) => makeCard(c.q.trim(), c.a.trim(), tossups[i]?.subcategory || fetchCat));
+      const newCards = [];
+
+      bonuses.forEach(b => {
+        const leadin = stripHtml(b.leadin_sanitized || b.leadin || "").replace(/\[.*?\]/g, "").trim();
+        const parts = b.parts_sanitized || b.parts || [];
+        const answers = b.answers_sanitized || b.answers || [];
+        const subcat = b.subcategory || fetchCat;
+
+        parts.forEach((part, i) => {
+          const clue = stripHtml(part).replace(/\[.*?\]/g, "").trim();
+          const rawAns = stripHtml(answers[i] || "").replace(/\[.*?\]/g, "").replace(/\(.*?\)/g, "").trim();
+          const answer = rawAns.split("\n")[0].trim();
+
+          // Build question: leadin gives context, part is the specific clue
+          const question = leadin
+            ? `${leadin} — ${clue}`
+            : clue;
+
+          if (question && answer && !existing.has(question)) {
+            newCards.push(makeCard(question, answer, subcat));
+          }
+        });
+      });
 
       setDecks(prev => ({ ...prev, [fetchDeck]: [...(prev[fetchDeck] || []), ...newCards] }));
-      const skipped = tossups.length - newCards.length;
-      setFetchStatus({ type: "success", msg: `✓ Added ${newCards.length} flashcard${newCards.length !== 1 ? "s" : ""} to "${fetchDeck}"!${skipped > 0 ? ` (${skipped} duplicates skipped)` : ""}` });
+      const skipped = (bonuses.length * 3) - newCards.length;
+      setFetchStatus({ type: "success", msg: `✓ Added ${newCards.length} card${newCards.length !== 1 ? "s" : ""} to "${fetchDeck}"!${skipped > 0 ? ` (${skipped} duplicates skipped)` : ""}` });
     } catch (err) {
       setFetchStatus({ type: "error", msg: "✗ " + err.message });
     }
     setFetching(false);
-  }, [fetchCat, fetchCount, fetchDeck, decks]);
-
+  }, [fetchCat, fetchCount, fetchDeck, fetchDifficulty, decks]);
   // ── Add card ───────────────────────────────────────────────────────────────
   const addCard = () => {
     if (!newCard.front.trim() || !newCard.back.trim()) return;
@@ -297,8 +273,7 @@ Format: [{"q":"...","a":"..."},...]`,
         <div style={S.sub}>Pull novice questions from qbreader.org — AI rewrites each into a clean flashcard</div>
         <div style={S.fetchCard}>
           <div style={{ fontSize: "13px", color: "#9a96a8", marginBottom: "20px", lineHeight: 1.7, fontStyle: "italic" }}>
-            Each tossup is rewritten by AI into a clear "Name the X who did Y" style question.
-            Difficulty: <span style={{ color: "#c9a96e", fontStyle: "normal" }}>novice → middle school (levels 1–3)</span>.
+            Fetches bonus questions from qbreader.org. Each bonus has 3 parts — each becomes its own flashcard with the leadin as context.
           </div>
           <div style={S.section}>
             <label style={S.label}>Category</label>
@@ -308,11 +283,27 @@ Format: [{"q":"...","a":"..."},...]`,
               ))}
             </div>
           </div>
+          <div style={S.section}>
+            <label style={S.label}>Difficulty</label>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              {[
+                { key: "novice", label: "Novice", sub: "Levels 1-2" },
+                { key: "intermediate", label: "Intermediate", sub: "Levels 3-4" },
+                { key: "hard", label: "Hard", sub: "Levels 5-7" },
+              ].map(d => (
+                <div key={d.key} onClick={() => setFetchDifficulty(d.key)}
+                  style={{ ...S.catTag(fetchDifficulty === d.key), padding: "8px 18px", textAlign: "center" }}>
+                  <div style={{ fontWeight: 600 }}>{d.label}</div>
+                  <div style={{ fontSize: "10px", opacity: 0.7, marginTop: "2px" }}>{d.sub}</div>
+                </div>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
             <div style={S.section}>
-              <label style={S.label}>Number of Cards</label>
+              <label style={S.label}>Number of Bonuses</label>
               <select style={S.select} value={fetchCount} onChange={e => setFetchCount(Number(e.target.value))}>
-                {[10, 20, 30, 50].map(n => <option key={n} value={n}>{n} cards</option>)}
+                {[5, 10, 20, 30].map(n => <option key={n} value={n}>{n} bonuses ({n*3} cards)</option>)}
               </select>
             </div>
             <div style={S.section}>
@@ -325,7 +316,7 @@ Format: [{"q":"...","a":"..."},...]`,
         </div>
         <button style={{ ...S.btn, fontSize: "15px", padding: "13px 28px", opacity: fetching ? 0.6 : 1 }}
           onClick={fetchCards} disabled={fetching}>
-          {fetching ? "⏳ Working..." : "⬇ Fetch from qbreader.org"}
+          {fetching ? "⏳ Fetching..." : `⬇ Fetch ${fetchCount} ${fetchDifficulty} ${fetchCat} bonuses`}
         </button>
         {fetchStatus && <div style={S.statusBox(fetchStatus.type)}>{fetchStatus.msg}</div>}
       </div>
